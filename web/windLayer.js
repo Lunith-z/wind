@@ -3,14 +3,13 @@ import * as ColorRamp from "./colorRamp.js?v=2";
 const { getColorRamp, DEFAULT_RAMP_NAME } = ColorRamp;
 
 const {
+  Cartesian2,
   Cartesian3,
   Color,
   Math: CesiumMath,
   Material,
   PolylineCollection,
   SceneTransforms,
-  BillboardCollection,
-  BlendOption,
 } = Cesium;
 
 const EARTH_RADIUS = 6378137;
@@ -22,13 +21,13 @@ const FLOW_NOISE_ALT_METERS = 0;
 const FLOW_NOISE_SMOOTH_FACTOR = 1.0;
 
 const DEFAULT_LAYER_OPTIONS = {
-  maxParticles: 2200,
+  maxParticles: 60000,
   // 拉长寿命、放大速度，便于观察粒子跨域运动。
   maxAge: 12000,
   speedFactor: 8.0,
-  lineWidth: 2.6,
-  fadeOpacity: 0.92,
-  trailLength: 24,
+  lineWidth: 1.2,
+  fadeOpacity: 0.965,
+  trailLength: 32,
   showTrails: true,
   dropRate: 0.002,
   dropRateBump: 0.006,
@@ -36,13 +35,13 @@ const DEFAULT_LAYER_OPTIONS = {
   levelIndex: 0,
   multiLevel: true,
   levelStride: 1,
-  headSize: 12,
+  headSize: 10,
   headOpacity: 0.96,
   minHeadOpacity: 0.35,
   maxHeadOpacity: 0.96,
   minTrailOpacity: 0.25,
   maxTrailOpacity: 0.92,
-  lengthScale: 3.6,
+  lengthScale: 5.2,
   minStreakLength: null,
   maxStreakLength: null,
   minBillboardLength: 48,
@@ -74,6 +73,7 @@ const DEFAULT_LAYER_OPTIONS = {
   softStreakMode: false,
   softStreakMeters: 2000,
   billboardOnly: false,
+  showBillboards: false,
 };
 
 const DEFAULT_STREAM_OPTIONS = {
@@ -211,93 +211,9 @@ function tintColorBySpeed(color, ratio, lightenStrength = 0.35, darkenStrength =
   return tinted;
 }
 
-const PARTICLE_TRAIL_MATERIAL = "ParticleTrail";
-let particleTrailMaterialInitialized = false;
-function ensureParticleTrailMaterial() {
-  if (particleTrailMaterialInitialized) {
-    return PARTICLE_TRAIL_MATERIAL;
-  }
-  Material._materialCache.addMaterial(PARTICLE_TRAIL_MATERIAL, {
-    fabric: {
-      type: PARTICLE_TRAIL_MATERIAL,
-      uniforms: {
-        color: Color.WHITE.clone(),
-        tailPower: 1.3,
-        tailMinimum: 0.18,
-      },
-      source: `
-czm_material czm_getMaterial(czm_materialInput materialInput)
-{
-    czm_material material = czm_getDefaultMaterial(materialInput);
-    float progress = clamp(materialInput.s, 0.0, 1.0);
-    float tapered = pow(progress, tailPower);
-    float visibility = mix(tailMinimum, 1.0, tapered);
-    material.diffuse = color.rgb;
-    material.alpha = color.a * visibility;
-    return material;
-}
-      `,
-    },
-    translucent: () => true,
-  });
-  particleTrailMaterialInitialized = true;
-  return PARTICLE_TRAIL_MATERIAL;
-}
 
-let particleTexture = null;
-function getParticleTexture() {
-  if (particleTexture) {
-    return particleTexture;
-  }
-  const width = 130;
-  const height = 18;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, width, height);
-
-  const stroke = (start, end, alpha, thickness) => {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.strokeStyle = "rgba(255,255,255,1)";
-    ctx.lineCap = "round";
-    ctx.lineWidth = thickness;
-    ctx.beginPath();
-    ctx.moveTo(start, height / 2);
-    ctx.lineTo(end, height / 2);
-    ctx.stroke();
-    ctx.restore();
-  };
-
-  ctx.globalCompositeOperation = "lighter";
-  stroke(6, width - 6, 0.12, height * 0.85);
-  stroke(10, width - 10, 0.3, height * 0.55);
-  stroke(18, width - 24, 0.55, height * 0.35);
-  stroke(24, width - 18, 0.95, height * 0.22);
-
-  // Head flare
-  const headGradient = ctx.createRadialGradient(
-    width - 12,
-    height / 2,
-    0,
-    width - 12,
-    height / 2,
-    12
-  );
-  headGradient.addColorStop(0, "rgba(255,255,255,0.95)");
-  headGradient.addColorStop(0.5, "rgba(255,255,255,0.35)");
-  headGradient.addColorStop(1, "rgba(255,255,255,0.02)");
-  ctx.fillStyle = headGradient;
-  ctx.globalAlpha = 0.9;
-  ctx.beginPath();
-  ctx.arc(width - 12, height / 2, 12, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  particleTexture = canvas.toDataURL("image/png");
-  return particleTexture;
-}
+const SCRATCH_WINDOW_CURRENT = new Cartesian2();
+const SCRATCH_WINDOW_PREV = new Cartesian2();
 
 export class FlowTextureLayer {
   constructor(viewer, windField, options = {}) {
@@ -634,18 +550,9 @@ export class WindParticleLayer {
       this.options.levelIndex,
       windField.levels.length
     );
-    this.collection = viewer.scene.primitives.add(new PolylineCollection());
-    if (BlendOption && this.collection) {
-      this.collection.blendOption = BlendOption.ADDITIVE;
-    }
-    this.billboardCollection = viewer.scene.primitives.add(
-      new BillboardCollection({
-        scene: viewer.scene,
-      })
-    );
-    if (BlendOption && this.billboardCollection) {
-      this.billboardCollection.blendOption = BlendOption.ADDITIVE;
-    }
+    this.canvas = null;
+    this.ctx = null;
+    this.pixelRatio = window.devicePixelRatio || 1;
     this.colorRamp =
       this.options.colorRamp && typeof this.options.colorRamp.sample === "function"
         ? this.options.colorRamp
@@ -665,7 +572,13 @@ export class WindParticleLayer {
     this._intervalAccumulator = 0;
     this.particles = [];
     this._tick = this._tick.bind(this);
+    this._draw = this._draw.bind(this);
+    this._resizeCanvas = this._resizeCanvas.bind(this);
+    this._setupOverlay();
     this.viewer.clock.onTick.addEventListener(this._tick);
+    this.viewer.scene.postRender.addEventListener(this._draw);
+    window.addEventListener("resize", this._resizeCanvas);
+    this._suppressFrames = 0;
     this._multiLevelIndices = [];
     this._rebuildMultiLevelIndices();
     this.integrationSteps = Math.max(
@@ -685,12 +598,13 @@ export class WindParticleLayer {
 
   destroy() {
     this.viewer.clock.onTick.removeEventListener(this._tick);
-    if (this.collection && !this.collection.isDestroyed()) {
-      this.viewer.scene.primitives.remove(this.collection);
+    this.viewer.scene.postRender.removeEventListener(this._draw);
+    window.removeEventListener("resize", this._resizeCanvas);
+    if (this.canvas && this.canvas.parentNode) {
+      this.canvas.parentNode.removeChild(this.canvas);
     }
-    if (this.billboardCollection && !this.billboardCollection.isDestroyed()) {
-      this.viewer.scene.primitives.remove(this.billboardCollection);
-    }
+    this.canvas = null;
+    this.ctx = null;
     this.particles.length = 0;
   }
 
@@ -698,6 +612,7 @@ export class WindParticleLayer {
     this.particles.forEach((particle) => {
       this._resetParticle(particle, true);
     });
+    this._clearCanvas();
   }
 
   updateConfig(patch = {}) {
@@ -705,9 +620,10 @@ export class WindParticleLayer {
     const previousStride = this.options.levelStride;
     const toggledShowTrails =
       Object.prototype.hasOwnProperty.call(patch, "showTrails");
+    let colorRampChanged = false;
     Object.assign(this.options, patch);
     this.options.maxParticles = Math.round(
-      CesiumMath.clamp(this.options.maxParticles, 200, 8000)
+      CesiumMath.clamp(this.options.maxParticles, 200, 200000)
     );
     this.options.lineWidth = Math.max(0.3, this.options.lineWidth || 0.3);
     this.options.fadeOpacity = CesiumMath.clamp(
@@ -755,8 +671,10 @@ export class WindParticleLayer {
     );
     if (patch.colorRamp) {
       this.setColorRamp(patch.colorRamp);
+      colorRampChanged = true;
     } else if (patch.colorRampName) {
       this.setColorRamp(getColorRamp(patch.colorRampName));
+      colorRampChanged = true;
     }
 
     if (patch.updateInterval !== undefined) {
@@ -781,6 +699,9 @@ export class WindParticleLayer {
     if (patch.guideInfluence !== undefined) {
       this.guideInfluence = CesiumMath.clamp(patch.guideInfluence, 0, 1);
       this.options.guideInfluence = this.guideInfluence;
+    }
+    if (patch.showBillboards !== undefined) {
+      this.options.showBillboards = !!patch.showBillboards;
     }
 
     if (patch.trailLength !== undefined) {
@@ -813,20 +734,18 @@ export class WindParticleLayer {
 
     if (this.options.maxParticles !== previousMax) {
       this._resizeParticlePool();
-    } else {
+    } else if (
+      patch.colorRamp ||
+      patch.colorRampName ||
+      Object.prototype.hasOwnProperty.call(patch, "fadeOpacity") ||
+      Object.prototype.hasOwnProperty.call(patch, "headOpacity")
+    ) {
       this.particles.forEach((particle) => {
-        if (particle.line) {
-          particle.line.width = this.options.lineWidth;
-          if (toggledShowTrails) {
-            particle.line.show = !!this.options.showTrails;
-          }
-        }
-        if (particle.billboard) {
-          particle.billboard.width = this.options.headSize * 4.5;
-          particle.billboard.height = this.options.headSize * 1.8;
-        }
         this._applyParticleColors(particle);
       });
+    }
+    if (toggledShowTrails || colorRampChanged) {
+      this._clearCanvas();
     }
   }
 
@@ -846,6 +765,22 @@ export class WindParticleLayer {
 
   isPaused() {
     return this.paused;
+  }
+
+  clearTrails() {
+    this._clearCanvas();
+    this.particles.forEach((particle) => {
+      if (particle.renderPosition) {
+        particle.prevPosition = Cartesian3.clone(particle.renderPosition);
+      } else {
+        particle.prevPosition = null;
+      }
+    });
+  }
+
+  onCameraMovement(frameCount = 6) {
+    this._suppressFrames = Math.max(this._suppressFrames, frameCount);
+    this.clearTrails();
   }
 
   updateCameraHeight(height = 0) {
@@ -870,18 +805,7 @@ export class WindParticleLayer {
 
   _resizeParticlePool() {
     if (this.particles.length > this.options.maxParticles) {
-      const excess = this.particles.splice(
-        this.options.maxParticles,
-        this.particles.length
-      );
-      excess.forEach((particle) => {
-        if (particle.line) {
-          this.collection.remove(particle.line);
-        }
-        if (particle.billboard && !this.billboardCollection.isDestroyed()) {
-          this.billboardCollection.remove(particle.billboard);
-        }
-      });
+      this.particles.length = this.options.maxParticles;
       return;
     }
 
@@ -889,6 +813,194 @@ export class WindParticleLayer {
       const particle = this._createParticle();
       this.particles.push(particle);
     }
+  }
+
+  _setupOverlay() {
+    const container = this.viewer?.container;
+    if (!container) {
+      return;
+    }
+    const computed = window.getComputedStyle?.(container);
+    if (computed && computed.position === "static") {
+      container.style.position = "relative";
+    }
+    if (this.canvas && this.canvas.parentNode !== container) {
+      this.canvas.parentNode.removeChild(this.canvas);
+    }
+    if (!this.canvas) {
+      this.canvas = document.createElement("canvas");
+      this.canvas.className = "wind-particle-overlay";
+      this.canvas.style.position = "absolute";
+      this.canvas.style.top = "0";
+      this.canvas.style.left = "0";
+      this.canvas.style.width = "100%";
+      this.canvas.style.height = "100%";
+      this.canvas.style.pointerEvents = "none";
+      this.canvas.style.mixBlendMode = "screen";
+      this.canvas.style.zIndex = "1";
+      this.ctx = this.canvas.getContext("2d", { alpha: true });
+    }
+    if (!this.canvas.parentNode && container) {
+      container.appendChild(this.canvas);
+    }
+    this.pixelRatio = window.devicePixelRatio || 1;
+    this._resizeCanvas();
+  }
+
+  _resizeCanvas() {
+    if (!this.canvas) {
+      return;
+    }
+    const domCanvas = this.viewer?.canvas;
+    if (!domCanvas) {
+      return;
+    }
+    const width = domCanvas.clientWidth || domCanvas.width || 0;
+    const height = domCanvas.clientHeight || domCanvas.height || 0;
+    if (!width || !height) {
+      return;
+    }
+    const ratio = window.devicePixelRatio || 1;
+    const scaledWidth = Math.max(1, Math.round(width * ratio));
+    const scaledHeight = Math.max(1, Math.round(height * ratio));
+    const needsResize =
+      this.canvas.width !== scaledWidth ||
+      this.canvas.height !== scaledHeight ||
+      this.pixelRatio !== ratio;
+    if (!needsResize) {
+      return;
+    }
+    this.canvas.width = scaledWidth;
+    this.canvas.height = scaledHeight;
+    this.canvas.style.width = `${width}px`;
+    this.canvas.style.height = `${height}px`;
+    this.pixelRatio = ratio;
+    if (this.ctx) {
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.ctx.clearRect(0, 0, scaledWidth, scaledHeight);
+    }
+  }
+
+  _clearCanvas() {
+    if (!this.canvas || !this.ctx) {
+      return;
+    }
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  _draw() {
+    if (!this.canvas || !this.ctx || !this.viewer) {
+      this._setupOverlay();
+      if (!this.canvas || !this.ctx) {
+        return;
+      }
+    }
+    if (!this.particles.length) {
+      this._clearCanvas();
+      return;
+    }
+    if (this.paused || this._cameraPaused) {
+      return;
+    }
+    if (this._suppressFrames > 0) {
+      this._clearCanvas();
+      this._suppressFrames -= 1;
+      return;
+    }
+    this._resizeCanvas();
+    const ctx = this.ctx;
+    const fade = CesiumMath.clamp(
+      this.options.fadeOpacity ?? DEFAULT_LAYER_OPTIONS.fadeOpacity,
+      0.6,
+      0.995
+    );
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.restore();
+
+    ctx.save();
+    ctx.setTransform(this.pixelRatio, 0, 0, this.pixelRatio, 0, 0);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = 1;
+
+    const scene = this.viewer.scene;
+    const showTrails = this.options.showTrails !== false;
+    const showHeads = this.options.showBillboards !== false;
+    const canvasWidth = this.viewer.canvas?.clientWidth || 0;
+    const canvasHeight = this.viewer.canvas?.clientHeight || 0;
+    const padding = 60;
+
+    for (const particle of this.particles) {
+      const currentPosition = particle.renderPosition;
+      const previousPosition = particle.prevPosition;
+      if (!currentPosition || !previousPosition) {
+        continue;
+      }
+      const currentWindow = SceneTransforms.wgs84ToWindowCoordinates(
+        scene,
+        currentPosition,
+        SCRATCH_WINDOW_CURRENT
+      );
+      const previousWindow = SceneTransforms.wgs84ToWindowCoordinates(
+        scene,
+        previousPosition,
+        SCRATCH_WINDOW_PREV
+      );
+      if (!currentWindow || !previousWindow) {
+        continue;
+      }
+      if (
+        currentWindow.x < -padding ||
+        currentWindow.y < -padding ||
+        currentWindow.x > canvasWidth + padding ||
+        currentWindow.y > canvasHeight + padding
+      ) {
+        continue;
+      }
+      if (showTrails) {
+        const ratio = Number.isFinite(particle.lengthRatio)
+          ? particle.lengthRatio
+          : particle.speedRatio || 0;
+        const strokeWidth = Math.max(
+          0.6,
+          this.options.lineWidth * (0.4 + this.options.lengthScale * ratio)
+        );
+        const tailColor = particle.trailColorCss || "rgba(255,255,255,0.45)";
+        const headColor = particle.headColorCss || "rgba(255,255,255,0.95)";
+        const gradient = ctx.createLinearGradient(
+          previousWindow.x,
+          previousWindow.y,
+          currentWindow.x,
+          currentWindow.y
+        );
+        gradient.addColorStop(0, tailColor);
+        gradient.addColorStop(1, headColor);
+        ctx.lineWidth = strokeWidth;
+        ctx.strokeStyle = gradient;
+        ctx.beginPath();
+        ctx.moveTo(previousWindow.x, previousWindow.y);
+        ctx.lineTo(currentWindow.x, currentWindow.y);
+        ctx.stroke();
+      }
+      if (showHeads) {
+        const headRadius = Math.max(
+          1.5,
+          (this.options.headSize || 12) * 0.4
+        );
+        ctx.fillStyle = particle.headColorCss || "rgba(255,255,255,0.85)";
+        ctx.beginPath();
+        ctx.arc(currentWindow.x, currentWindow.y, headRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
   }
 
   _sampleGuide(lonDeg, latDeg) {
@@ -1016,10 +1128,6 @@ export class WindParticleLayer {
       50,
       Number(opts.softStreakMeters ?? DEFAULT_LAYER_OPTIONS.softStreakMeters) || 200
     );
-    opts.billboardOnly = opts.billboardOnly === true;
-    if (opts.billboardOnly) {
-      opts.showTrails = false;
-    }
   }
 
   _applyParticleColors(particle, providedColorRatio = null) {
@@ -1042,235 +1150,36 @@ export class WindParticleLayer {
       this.options.maxTrailOpacity
     );
     const trailAlpha = CesiumMath.lerp(minTrailAlpha, maxTrailAlpha, ratio);
-    if (particle.line?.material?.uniforms) {
-      const lineColor = tintColorBySpeed(
-        colorFromRatio(this.colorRamp, ratio, trailAlpha),
-        ratio,
-        this.options.colorLightness,
-        this.options.colorDarkness
-      );
-      particle.line.material.uniforms.color = brightenColor(
-        lineColor,
-        1.02,
-        0.015
-      );
-      if (typeof particle.line.material.uniforms.glowPower === "number") {
-        particle.line.material.uniforms.glowPower = CesiumMath.clamp(
-          0.08 + ratio * 0.35,
-          0.05,
-          0.7
-        );
-      }
-      if (typeof particle.line.material.uniforms.tailPower === "number") {
-        particle.line.material.uniforms.tailPower = this.options.trailTaperPower;
-      }
-      if (typeof particle.line.material.uniforms.tailMinimum === "number") {
-        particle.line.material.uniforms.tailMinimum = this.options.trailTailOpacity;
-      }
-    }
-    if (particle.billboard) {
-      const minHeadAlpha = Math.min(
-        this.options.minHeadOpacity,
-        this.options.maxHeadOpacity
-      );
-      const maxHeadAlpha = Math.max(
-        this.options.minHeadOpacity,
-        this.options.maxHeadOpacity
-      );
-      const headAlpha = CesiumMath.lerp(minHeadAlpha, maxHeadAlpha, ratio);
-      const headColor = tintColorBySpeed(
-        colorFromRatio(this.colorRamp, ratio, headAlpha),
-        ratio,
-        this.options.colorLightness * 0.8,
-        this.options.colorDarkness * 0.8
-      );
-      particle.billboard.color = brightenColor(headColor, 1.18, 0.04);
-    }
-  }
-
-  _initializeTrailHistory(particle, headPosition) {
-    const targetPoints = targetPointsFromTrailLength(this.options.trailLength);
-    if (!particle.line) {
-      return;
-    }
-    const history = particle.history;
-    history.length = 0;
-    particle.historySegments = particle.historySegments || [];
-    particle.historySegments.length = 0;
-    particle.trailMeters = 0;
-    for (let i = 0; i < targetPoints; i += 1) {
-      history.push(Cartesian3.clone(headPosition));
-      if (!this.options.softStreakMode && i > 0) {
-        particle.historySegments.push(0);
-      }
-    }
-    particle.historySegments.length = this.options.softStreakMode
-      ? 0
-      : Math.max(0, history.length - 1);
-    if (particle.line) {
-      particle.line.positions = history;
-      particle.line.width = this.options.lineWidth;
-      particle.line.show = this.options.showTrails;
-    }
-  }
-
-  _updateParticleTrailHistory(particle, headPosition, displacement) {
-    if (!particle.line) {
-      return;
-    }
-    if (this.options.softStreakMode) {
-      this._populateSoftStreak(particle, headPosition, displacement);
-      return;
-    }
-    const history = particle.history;
-    const segments = particle.historySegments || (particle.historySegments = []);
-    if (!Number.isFinite(particle.trailMeters)) {
-      particle.trailMeters = 0;
-    }
-    const targetPoints = targetPointsFromTrailLength(this.options.trailLength);
-    const minPoints = Math.max(2, Math.min(targetPoints, 128));
-
-    if (history.length === 0) {
-      history.push(Cartesian3.clone(headPosition));
-      particle.trailMeters = 0;
-      segments.length = 0;
-      return;
-    }
-
-    history.push(Cartesian3.clone(headPosition));
-    const prev = history[history.length - 2];
-    const segmentLength = Cartesian3.distance(prev, headPosition);
-    segments.push(segmentLength);
-    particle.trailMeters += segmentLength;
-
-    while (history.length > targetPoints) {
-      history.shift();
-      const removed = segments.shift();
-      if (Number.isFinite(removed)) {
-        particle.trailMeters -= removed;
-      }
-    }
-
-    if (this.options.uniformTrailMeters > 0) {
-      const targetMeters = this.options.uniformTrailMeters;
-      while (
-        history.length > minPoints &&
-        particle.trailMeters > targetMeters * 1.02
-      ) {
-        history.shift();
-        const removed = segments.shift();
-        if (Number.isFinite(removed)) {
-          particle.trailMeters -= removed;
-        }
-      }
-    }
-
-    particle.line.positions = history;
-  }
-
-  _updatePolylineSegment(particle, headPosition, displacement, altitude) {
-    if (!particle.line) {
-      return;
-    }
-    const baseMeters = this.options.softStreakMeters || 2000;
-    const maxMeters = baseMeters * 2.0;
-    const maxSpeed = Math.max(this.field.maxSpeed || 1, 1e-3);
-    const sampleSpeed = displacement.sampleSpeed || particle.speedRatio * maxSpeed || 0;
-    const speedRatio = CesiumMath.clamp(sampleSpeed / maxSpeed, 0, 1);
-    const minFactor = 0.45;
-    const maxFactor = 1.0;
-    const factor = CesiumMath.lerp(minFactor, maxFactor, Math.sqrt(speedRatio));
-    const segMeters = CesiumMath.clamp(baseMeters * factor, baseMeters * 0.3, maxMeters);
-
-    let east = displacement.eastMeters;
-    let north = displacement.northMeters;
-    if (!Number.isFinite(east) || !Number.isFinite(north) || (Math.abs(east) < 1e-4 && Math.abs(north) < 1e-4)) {
-      const heading = Number.isFinite(particle.heading) ? particle.heading : 0;
-      east = Math.sin(heading);
-      north = Math.cos(heading);
-    }
-    const mag = Math.hypot(east, north) || 1;
-    const ue = east / mag;
-    const un = north / mag;
-
-    const latRad = CesiumMath.toRadians(particle.lat);
-    const cosLat = Math.max(Math.cos(latRad), 0.01);
-
-    const lonOffset =
-      ((-ue * segMeters) / (EARTH_RADIUS * cosLat)) *
-      CesiumMath.DEGREES_PER_RADIAN;
-    const latOffset =
-      ((-un * segMeters) / EARTH_RADIUS) *
-      CesiumMath.DEGREES_PER_RADIAN;
-
-    const tailPosition = Cartesian3.fromDegrees(
-      particle.lon + lonOffset,
-      particle.lat + latOffset,
-      altitude
+    const streakColor = tintColorBySpeed(
+      colorFromRatio(this.colorRamp, ratio, trailAlpha),
+      ratio,
+      this.options.colorLightness,
+      this.options.colorDarkness
     );
+    const brightTrail = brightenColor(streakColor, 1.1, 0.02);
+    particle.trailColorCss = brightTrail.toCssColorString();
 
-    particle.line.positions = [tailPosition, headPosition];
-  }
-
-  _populateSoftStreak(particle, headPosition, displacement) {
-    if (!particle.line) {
-      return;
-    }
-    const history = particle.history;
-    const targetPoints = targetPointsFromTrailLength(this.options.trailLength);
-    const points = Math.max(2, targetPoints);
-    const totalLength =
-      this.options.softStreakMeters ||
-      this.options.uniformTrailMeters ||
-      this.options.uniformStreakLength * 5 ||
-      200;
-    const stepMeters = totalLength / Math.max(1, points - 1);
-    const direction = this._headingComponents(particle, displacement);
-    const latRad = CesiumMath.toRadians(particle.lat);
-    const cosLat = Math.max(Math.cos(latRad), 0.01);
-    while (history.length < points) {
-      history.push(Cartesian3.clone(headPosition));
-    }
-    if (history.length > points) {
-      history.length = points;
-    }
-    for (let i = 0; i < points; i += 1) {
-      const offset = stepMeters * i;
-      const lonOffset =
-        ((direction.east * offset) / (EARTH_RADIUS * cosLat)) *
-        CesiumMath.DEGREES_PER_RADIAN;
-      const latOffset =
-        ((direction.north * offset) / EARTH_RADIUS) *
-        CesiumMath.DEGREES_PER_RADIAN;
-      const index = points - i - 1;
-      history[index] = Cartesian3.fromDegrees(
-        particle.lon - lonOffset,
-        particle.lat - latOffset,
-        headPosition.z
-      );
-    }
-    particle.line.positions = history;
-  }
-
-  _headingComponents(particle, displacement) {
-    let east = displacement?.eastMeters;
-    let north = displacement?.northMeters;
-    if (
-      !Number.isFinite(east) ||
-      !Number.isFinite(north) ||
-      (Math.abs(east) < 1e-4 && Math.abs(north) < 1e-4)
-    ) {
-      const heading = Number.isFinite(particle.heading) ? particle.heading : 0;
-      east = Math.sin(heading);
-      north = Math.cos(heading);
-    }
-    const mag = Math.hypot(east, north) || 1;
-    return { east: east / mag, north: north / mag };
+    const minHeadAlpha = Math.min(
+      this.options.minHeadOpacity,
+      this.options.maxHeadOpacity
+    );
+    const maxHeadAlpha = Math.max(
+      this.options.minHeadOpacity,
+      this.options.maxHeadOpacity
+    );
+    const headAlpha = CesiumMath.lerp(minHeadAlpha, maxHeadAlpha, ratio);
+    const glowColor = tintColorBySpeed(
+      colorFromRatio(this.colorRamp, ratio, headAlpha),
+      ratio,
+      this.options.colorLightness * 0.75,
+      this.options.colorDarkness * 0.5
+    );
+    const brightHead = brightenColor(glowColor, 1.25, 0.05);
+    particle.headColorCss = brightHead.toCssColorString();
   }
 
   _createParticle() {
-    const placeholder = Cartesian3.clone(Cartesian3.ZERO);
-    const path = [placeholder.clone(), placeholder.clone()];
+    const basePosition = Cartesian3.clone(Cartesian3.ZERO);
     const particle = {
       lon: 0,
       lat: 0,
@@ -1279,33 +1188,12 @@ export class WindParticleLayer {
       altitude: 0,
       speedRatio: 0,
       heading: 0,
-      history: path,
-      historySegments: [],
-      trailMeters: 0,
-      line: this.options.billboardOnly
-        ? null
-        : this.collection.add({
-            positions: path,
-            width: this.options.lineWidth,
-            material: Material.fromType(Material.PolylineGlowType, {
-              color: Color.WHITE.clone(),
-              glowPower: 0.2,
-              taperPower: this.options.trailTaperPower,
-            }),
-            show: this.options.showTrails,
-          }),
-      billboard: this.billboardCollection.add({
-        position: Cartesian3.clone(Cartesian3.ZERO),
-        color: colorFromRatio(this.colorRamp, 0, this.options.headOpacity),
-        width: this.options.headSize * 4.5,
-        height: this.options.headSize * 1.8,
-        image: getParticleTexture(),
-        alignedAxis: Cartesian3.UNIT_Z,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-      }),
+      renderPosition: basePosition.clone(),
+      prevPosition: basePosition.clone(),
+      trailColorCss: "rgba(255,255,255,0.6)",
+      headColorCss: "rgba(255,255,255,0.9)",
       prevLon: 0,
       prevLat: 0,
-      prevPosition: null,
       noiseSeed: Math.random() * Math.PI * 2,
       prevWind: null,
     };
@@ -1323,7 +1211,6 @@ export class WindParticleLayer {
     particle.prevWind = null;
     particle.heading = 0;
     particle.age = keepAge ? particle.age : Math.random() * this.options.maxAge;
-    particle.history.length = 0;
 
     let levelIndex;
     if (this.options.multiLevel) {
@@ -1346,20 +1233,8 @@ export class WindParticleLayer {
       particle.lat,
       altitude
     );
-    this._initializeTrailHistory(particle, firstPosition);
+    particle.renderPosition = firstPosition.clone();
     particle.prevPosition = firstPosition.clone();
-    if (particle.billboard) {
-      particle.billboard.position = firstPosition;
-      particle.billboard.color = colorFromRatio(
-        this.colorRamp,
-        0,
-        this.options.headOpacity
-      );
-      particle.billboard.width = this.options.headSize * 4.5;
-      particle.billboard.height = this.options.headSize * 1.8;
-      particle.billboard.rotation = 0;
-      particle.billboard.show = true;
-    }
     this._applyParticleColors(particle, 0);
   }
 
@@ -1594,20 +1469,20 @@ export class WindParticleLayer {
         particle.lat + latOffset,
         altitude + altitudeOffset
       );
-      let smoothedPosition;
-      if (particle.prevPosition) {
-        smoothedPosition = Cartesian3.clone(rawPosition);
+      const previousRender = particle.renderPosition
+        ? Cartesian3.clone(particle.renderPosition)
+        : null;
+      let smoothedPosition = Cartesian3.clone(rawPosition);
+      if (particle.renderPosition) {
         Cartesian3.lerp(
-          particle.prevPosition,
+          particle.renderPosition,
           rawPosition,
           FLOW_NOISE_SMOOTH_FACTOR,
           smoothedPosition
         );
-      } else {
-        smoothedPosition = Cartesian3.clone(rawPosition);
       }
-      particle.prevPosition = Cartesian3.clone(smoothedPosition);
-      this._updatePolylineSegment(particle, smoothedPosition, displacement, altitude);
+      particle.renderPosition = smoothedPosition;
+      particle.prevPosition = previousRender || Cartesian3.clone(smoothedPosition);
       const windForColor = displacement.windSample || wind;
       const speedForColor =
         windForColor?.speed ?? displacement.sampleSpeed ?? wind.speed ?? 0;
@@ -1625,86 +1500,17 @@ export class WindParticleLayer {
         this.options.colorCurve,
         this.options.colorLogBase
       );
-      const scene = this.viewer.scene;
-      let visible = true;
-      if (this.options.screenCulling) {
-        const windowCoord = SceneTransforms.wgs84ToWindowCoordinates(
-          scene,
-          smoothedPosition
-        );
-        if (!windowCoord) {
-          visible = false;
-        } else {
-          const canvas = scene.canvas;
-          const padding = 120;
-          visible =
-            windowCoord.x >= -padding &&
-            windowCoord.x <= canvas.clientWidth + padding &&
-            windowCoord.y >= -padding &&
-            windowCoord.y <= canvas.clientHeight + padding;
-        }
-      }
-
-      const altitudeRatio = CesiumMath.clamp(
-        (altitude - this.field._minHeight) /
-          (this.field._maxHeight - this.field._minHeight || 1),
-        0,
-        1
-      );
-      if (particle.billboard) {
-        const east = displacement.eastMeters || 0;
-        const north = displacement.northMeters || 1e-5;
-        const heading = Math.atan2(east, north);
-        const fallbackMin =
-          this.options.headSize * (this.options.minStreakScale || 2.2);
-        const fallbackMax =
-          this.options.headSize * (this.options.maxStreakScale || 6.5);
-        const minStreak =
-          this.options.minStreakLength ?? fallbackMin;
-        const maxStreak =
-          this.options.maxStreakLength ?? fallbackMax;
-        const minBillboardLength = Math.max(
-          2,
-          this.options.minBillboardLength || 0
-        );
-        const streakMin = Math.max(minBillboardLength, minStreak, 2);
-        const streakMax = Math.max(streakMin, maxStreak, minBillboardLength);
-        const baseLength =
-          this.options.headSize * (0.9 + this.options.lengthScale * lengthRatio);
-        const altitudeScale = 0.7 + altitudeRatio * 0.6;
-        let streakLength;
-        if (Number.isFinite(this.options.uniformStreakLength) && this.options.uniformStreakLength > 0) {
-          streakLength = this.options.uniformStreakLength;
-        } else {
-          streakLength = CesiumMath.clamp(
-            baseLength * altitudeScale,
-            streakMin,
-            streakMax
-          );
-        }
-        const streakThickness = Number.isFinite(
-          this.options.uniformStreakThickness
-        )
-          ? this.options.uniformStreakThickness
-          : Math.max(
-              this.options.headSize * 0.8,
-              streakLength * (this.options.streakAspect || 0.18)
-            );
-        particle.billboard.position = smoothedPosition;
-        particle.billboard.width = streakLength;
-        particle.billboard.height = streakThickness;
-        particle.billboard.rotation = -heading;
-        particle.billboard.show = visible;
-        particle.heading = heading;
-      }
+      const east = displacement.eastMeters || 0;
+      const north = displacement.northMeters || 1e-5;
+      const heading = Math.atan2(east, north);
+      particle.heading = heading;
+      particle.lengthRatio = lengthRatio;
+      particle.altitude = altitude;
+      particle.speedRatio = normalizedSpeed;
       this._applyParticleColors(particle, colorRatio);
       particle.prevLon = particle.lon;
       particle.prevLat = particle.lat;
       particle.prevWind = cloneWind(windForColor || wind);
-      if (particle.line) {
-        particle.line.show = visible && this.options.showTrails;
-      }
-      particle.speedRatio = normalizedSpeed;
 
       particle.age += 1;
       if (

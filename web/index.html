@@ -411,10 +411,10 @@
         <input
           id="particleCount"
           type="range"
-          min="200"
-          max="3000"
-          step="100"
-          value="1000"
+          min="500"
+          max="120000"
+          step="1000"
+          value="60000"
         />
       </div>
       <div class="control">
@@ -439,11 +439,42 @@
         <input
           id="lineWidth"
           type="range"
-          min="0.5"
-          max="6"
-          step="0.5"
-          value="2.2"
+          min="0.2"
+          max="4"
+          step="0.2"
+          value="1.0"
         />
+      </div>
+      <div class="control">
+        <label for="fixedLengthToggle">
+          固定粒子长度
+          <input id="fixedLengthToggle" type="checkbox" />
+        </label>
+        <label for="fixedLengthValue">
+          长度
+          <span id="fixedLengthValueLabel">120 px</span>
+        </label>
+        <input
+          id="fixedLengthValue"
+          type="range"
+          min="40"
+          max="200"
+          step="2"
+          value="120"
+          disabled
+        />
+        <div class="control-hint">
+          勾选后粒子保持固定宽度，忽略速度差异。
+        </div>
+      </div>
+      <div class="control">
+        <label for="hideBillboards">
+          隐藏粒子节点
+          <input id="hideBillboards" type="checkbox" checked />
+        </label>
+        <div class="control-hint">
+          仅展示流线，不绘制亮点粒子头。
+        </div>
       </div>
       <div class="control">
         <label for="trailLength">
@@ -454,10 +485,19 @@
           id="trailLength"
           type="range"
           min="2"
-          max="40"
+          max="60"
           step="1"
-          value="24"
+          value="32"
         />
+      </div>
+      <div class="control">
+        <label for="hideTrails">
+          仅显示粒子头
+          <input id="hideTrails" type="checkbox" />
+        </label>
+        <div class="control-hint">
+          勾选后关闭所有轨迹线段，仅保留粒子本体。
+        </div>
       </div>
       <div class="control">
         <label for="fadeOpacity">
@@ -467,10 +507,10 @@
         <input
           id="fadeOpacity"
           type="range"
-          min="0.80"
-          max="0.96"
+          min="0.85"
+          max="0.99"
           step="0.001"
-          value="0.88"
+          value="0.965"
         />
       </div>
       <div class="control">

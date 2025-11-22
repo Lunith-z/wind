@@ -58,7 +58,7 @@ const COLOR_RAMPS = {
   },
 };
 
-export const DEFAULT_RAMP_NAME = "electroNeon";
+export const DEFAULT_RAMP_NAME = "neonVortex";
 
 function lerp(a, b, t) {
   return a + (b - a) * t;

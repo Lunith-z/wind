@@ -283,6 +283,8 @@ const state = {
   dynamicParticleScale: 1,
   manualPause: false,
   lastCameraHeight: 0,
+  lastCameraPose: null,
+  streamVisible: true,
 };
 
 if (typeof window !== "undefined") {
@@ -322,7 +324,12 @@ const ui = {
   speedFactorValue: document.getElementById("speedFactorValue"),
   lineWidth: document.getElementById("lineWidth"),
   lineWidthValue: document.getElementById("lineWidthValue"),
+  fixedLengthToggle: document.getElementById("fixedLengthToggle"),
+  fixedLengthValue: document.getElementById("fixedLengthValue"),
+  fixedLengthValueLabel: document.getElementById("fixedLengthValueLabel"),
   trailLength: document.getElementById("trailLength"),
+  hideTrails: document.getElementById("hideTrails"),
+  hideBillboards: document.getElementById("hideBillboards"),
   trailLengthValue: document.getElementById("trailLengthValue"),
   fadeOpacity: document.getElementById("fadeOpacity"),
   fadeOpacityValue: document.getElementById("fadeOpacityValue"),
@@ -708,6 +715,20 @@ function buildSpeedLegend(field, ramp = state.colorRamp) {
   }
 }
 
+function updateFixedLengthControls() {
+  if (!ui.fixedLengthToggle || !ui.fixedLengthValue) {
+    return;
+  }
+  const headsVisible = !(ui.hideBillboards?.checked);
+  const enabled = headsVisible && !!ui.fixedLengthToggle.checked;
+  ui.fixedLengthValue.disabled = !enabled;
+  ui.fixedLengthToggle.disabled = !headsVisible;
+  const lengthValue = Number(ui.fixedLengthValue.value) || 0;
+  if (ui.fixedLengthValueLabel) {
+    ui.fixedLengthValueLabel.textContent = `${Math.max(0, lengthValue).toFixed(0)} px`;
+  }
+}
+
 function updateOrbitSpeedFromUI() {
   const speedDeg = Number(ui.orbitSpeed?.value) || 0.4;
   state.orbit.speed = Cesium.Math.toRadians(speedDeg);
@@ -1048,70 +1069,21 @@ function refreshFlowGuides() {
   // 已停用 flow guides，保留空实现以兼容旧调用。
 }
 
-function refreshStreamLayer(options = {}) {
-  const layer = ensureStreamLayer();
-  if (!layer || !state.field) {
+function refreshStreamLayer() {
+  state.streamVisible = false;
+  if (!state.streamLayer) {
     return;
   }
-  const sliderVertical = Number(ui.verticalScale?.value);
-  const baseVertical = Number.isFinite(sliderVertical)
-    ? sliderVertical
-    : 1200;
-  const sliderStride = Number(ui.levelStride?.value);
-  const seedStride = Number.isFinite(sliderStride)
-    ? Math.max(2, Math.round(sliderStride + 2))
-    : 3;
-  const defaults = {
-    levelIndex: Number(ui.levelSelect?.value) || 0,
-    clampSurface: state.surfaceClamp,
-    colorRamp: state.colorRamp,
-    colorRampName: state.colorRampName,
-    verticalScale: Math.max(80, baseVertical * 0.45),
-    seedStride,
-    stepSeconds: 420,
-    maxSteps: 70,
-    speedScale: 1.2,
-    lineWidth: 2.4,
-    glowPower: 0.2,
-    opacity: 0.78,
-  };
   try {
-    layer.update({ ...defaults, ...options });
+    state.streamLayer.destroy();
   } catch (err) {
-    console.warn("Refresh stream layer skipped:", err);
+    console.warn("Destroy stream layer failed:", err);
   }
+  state.streamLayer = null;
 }
 
 function ensureStreamLayer() {
-  if (state.streamLayer) {
-    return state.streamLayer;
-  }
-  if (!state.field) {
-    return null;
-  }
-  try {
-    state.streamLayer = new WindStreamLayer(viewer, state.field, {
-      levelIndex: Number(ui.levelSelect?.value) || 0,
-      clampSurface: state.surfaceClamp,
-      colorRamp: state.colorRamp,
-      colorRampName: state.colorRampName,
-      seedStride: 3,
-      stepSeconds: 420,
-      maxSteps: 70,
-      speedScale: 1.2,
-      lineWidth: 2.4,
-      glowPower: 0.2,
-      opacity: 0.78,
-      verticalScale: Math.max(
-        80,
-        (Number(ui.verticalScale?.value) || 1200) * 0.45
-      ),
-    });
-  } catch (err) {
-    console.warn("Create stream layer failed:", err);
-    state.streamLayer = null;
-  }
-  return state.streamLayer;
+  return null;
 }
 
 function updateLabels() {
@@ -1122,6 +1094,9 @@ function updateLabels() {
   ui.fadeOpacityValue.textContent = ui.fadeOpacity.value;
   ui.verticalScaleValue.textContent = `${ui.verticalScale.value} m`;
   ui.levelStrideValue.textContent = ui.levelStride.value;
+  if (ui.hideTrails) {
+    ui.trailLength.disabled = ui.hideTrails.checked;
+  }
   if (ui.orbitSpeed) {
     updateOrbitSpeedFromUI();
   }
@@ -1140,6 +1115,7 @@ function updateLabels() {
       )} m (${info.value.toFixed(3)})`;
     }
   }
+  updateFixedLengthControls();
 }
 
 function bindControls() {
@@ -1240,6 +1216,35 @@ function bindControls() {
         state.layer.setPaused(state.manualPause);
       }
       updatePauseIndicator();
+    });
+  }
+
+  if (ui.hideTrails) {
+    ui.hideTrails.addEventListener("change", () => {
+      updateLabels();
+      queueLayerUpdate();
+      refreshStreamLayer();
+    });
+  }
+
+  if (ui.hideBillboards) {
+    ui.hideBillboards.addEventListener("change", () => {
+      updateLabels();
+      queueLayerUpdate();
+    });
+  }
+
+  if (ui.fixedLengthToggle) {
+    ui.fixedLengthToggle.addEventListener("change", () => {
+      updateFixedLengthControls();
+      queueLayerUpdate();
+    });
+  }
+
+  if (ui.fixedLengthValue) {
+    ui.fixedLengthValue.addEventListener("input", () => {
+      updateFixedLengthControls();
+      queueLayerUpdate();
     });
   }
 
@@ -1370,11 +1375,21 @@ function queueLayerUpdate() {
     }
     const maxParticles = computeParticleTarget();
     updateParticleCountValueLabel();
+    const headOnly = !!ui.hideTrails?.checked;
+    const hideBillboards = !!ui.hideBillboards?.checked;
+    const uniformLength =
+      ui.fixedLengthToggle?.checked && ui.fixedLengthValue
+        ? Number(ui.fixedLengthValue.value)
+        : null;
+    const normalizedUniformLength =
+      Number.isFinite(uniformLength) && uniformLength > 0
+        ? Math.max(2, uniformLength)
+        : null;
     state.layer.updateConfig({
       maxParticles,
       speedFactor: Number(ui.speedFactor.value),
       lineWidth: Number(ui.lineWidth.value),
-      trailLength: Number(ui.trailLength.value),
+      trailLength: headOnly ? 2 : Number(ui.trailLength.value),
       fadeOpacity: Number(ui.fadeOpacity.value),
       verticalScale: Number(ui.verticalScale.value),
       levelStride: Number(ui.levelStride.value) || 1,
@@ -1382,6 +1397,12 @@ function queueLayerUpdate() {
       multiLevel: !!ui.multiLevel.checked,
       surfaceClamp: state.surfaceClamp,
       screenCulling: state.layer?.options?.screenCulling ?? false,
+      uniformStreakLength: headOnly
+        ? normalizedUniformLength ?? 90
+        : normalizedUniformLength,
+      uniformTrailMeters: headOnly ? 0 : null,
+      showTrails: !headOnly,
+      showBillboards: !hideBillboards,
       ...VISUAL_COMPENSATION_OVERRIDES,
     });
     refreshFlowGuides();
@@ -1472,6 +1493,30 @@ function handleCameraChanged() {
   state.lastCameraHeight = height;
   if (state.layer) {
     state.layer.updateCameraHeight(height);
+  }
+  const cart = viewer.camera?.positionCartographic;
+  if (cart) {
+    const lon = Cesium.Math.toDegrees(cart.longitude || 0);
+    const lat = Cesium.Math.toDegrees(cart.latitude || 0);
+    const pose = {
+      lon,
+      lat,
+      height: cart.height || 0,
+      heading: Cesium.Math.toDegrees(viewer.camera?.heading || 0),
+      pitch: Cesium.Math.toDegrees(viewer.camera?.pitch || 0),
+    };
+    const last = state.lastCameraPose;
+    const moved =
+      !last ||
+      Math.abs(pose.lon - last.lon) > 0.05 ||
+      Math.abs(pose.lat - last.lat) > 0.05 ||
+      Math.abs(pose.height - last.height) > 800 ||
+      Math.abs(pose.heading - last.heading) > 2 ||
+      Math.abs(pose.pitch - last.pitch) > 1.5;
+    if (moved && state.layer) {
+      state.layer.onCameraMovement(8);
+    }
+    state.lastCameraPose = pose;
   }
   if (ui.dynamicParticles?.checked) {
     applyDynamicParticleCount(height);
