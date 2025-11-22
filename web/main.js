@@ -185,7 +185,7 @@ const VISUAL_COMPENSATION_OVERRIDES = Object.freeze({
   headSize: 22,
   minWindSpeedRatio: 0.12,
   lifespanClampToDomain: true,
-  speedBoost: 2.0,
+  speedBoost: 20.0,
   billboardOnly: false,
   softStreakMode: false,
   softStreakMeters: 2000,
@@ -194,7 +194,7 @@ const VISUAL_COMPENSATION_OVERRIDES = Object.freeze({
 const PRESETS = {
   clear: {
     particleCount: 500,
-    speedFactor: 1.0,
+    speedFactor: 10.0,
     lineWidth: 1,
     trailLength: 5,
     fadeOpacity: 0.85,
@@ -214,7 +214,7 @@ const PRESETS = {
   },
   stream: {
     particleCount: 1200,
-    speedFactor: 1.0,
+    speedFactor: 14.0,
     lineWidth: 1.1,
     trailLength: 12,
     fadeOpacity: 0.9,
@@ -234,7 +234,7 @@ const PRESETS = {
   },
   showcase: {
     particleCount: 1700,
-    speedFactor: 1.25,
+    speedFactor: 18.0,
     lineWidth: 0.9,
     trailLength: 14,
     fadeOpacity: 0.93,
