@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cesium 风场三维可视化</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/cesium@1.114.0/Build/Cesium/Widgets/widgets.css"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+      body,
+      html {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+      }
+
+      #cesiumContainer {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        inset: 0;
+      }
+
+      #controlPanel {
+        position: absolute;
+        top: 1rem;
+        left: 1rem;
+        width: min(260px, calc(100% - 1.5rem));
+        max-height: calc(100% - 2rem);
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        padding: 0.85rem 1rem;
+        color: #fff;
+        background: linear-gradient(
+            130deg,
+            rgba(24, 28, 43, 0.7),
+            rgba(6, 8, 16, 0.85)
+          )
+          border-box;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        backdrop-filter: blur(14px);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        overflow-y: auto;
+      }
+
+      #controlPanel::-webkit-scrollbar {
+        width: 6px;
+      }
+      #controlPanel::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.35);
+        border-radius: 4px;
+      }
+
+      #controlPanel h2 {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+        padding-bottom: 0.65rem;
+      }
+
+      .control {
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
+        font-size: 0.85rem;
+        padding: 0.45rem 0.35rem;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .control label {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        align-items: center;
+        color: rgba(255, 255, 255, 0.85);
+      }
+
+      .control label span {
+        font-size: 0.78rem;
+        font-variant-numeric: tabular-nums;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        padding: 0.05rem 0.6rem;
+        color: #fff;
+      }
+
+      .control input[type="range"],
+      .control select {
+        accent-color: #58c1ff;
+      }
+
+      .control input[type="range"] {
+        width: 100%;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+      }
+
+      .control select,
+      .control button {
+        padding: 0.3rem 0.45rem;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.05);
+        color: inherit;
+        transition: background 0.2s ease, border-color 0.2s ease;
+      }
+
+      .control button {
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+
+      .control button:hover {
+        background: rgba(255, 255, 255, 0.15);
+      }
+
+      .control .control-hint {
+        font-size: 0.72rem;
+        color: rgba(255, 255, 255, 0.72);
+      }
+
+      .view-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+
+      .view-buttons button {
+        flex: 1 1 auto;
+        font-size: 0.75rem;
+        padding: 0.35rem 0.5rem;
+        border-radius: 10px;
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+
+      #cameraHelp {
+        font-size: 0.75rem;
+        opacity: 0.75;
+        padding: 0.3rem 0;
+      }
+
+      #legendPanel {
+        position: absolute;
+        top: 50%;
+        right: 1.5rem;
+        transform: translateY(-50%);
+        padding: 0.5rem 0.6rem;
+        border-radius: 6px;
+        background: rgba(0, 0, 0, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #fff;
+        font-size: 0.75rem;
+        text-align: center;
+        backdrop-filter: blur(6px);
+      }
+
+      #legendTitle {
+        margin-bottom: 0.25rem;
+        white-space: nowrap;
+      }
+
+      #legendBar {
+        position: relative;
+        width: 14px;
+        height: 180px;
+        margin: 0.2rem auto;
+        border-radius: 8px;
+        background: linear-gradient(
+          to top,
+          #0e308c 0%,
+          #20a6d6 35%,
+          #3ccd6f 60%,
+          #f7d75a 80%,
+          #ec4821 100%
+        );
+      }
+
+      #legendTicks {
+        position: relative;
+        width: 100%;
+        height: 180px;
+        margin: 0 auto;
+      }
+
+      .legend-tick {
+        position: absolute;
+        left: 100%;
+        transform: translateX(4px);
+        font-size: 0.7rem;
+        white-space: nowrap;
+      }
+
+      .legend-tick::before {
+        content: "";
+        position: absolute;
+        left: -6px;
+        top: 50%;
+        width: 5px;
+        height: 1px;
+        background: #fff;
+        transform: translateY(-50%);
+      }
+
+      #message {
+        font-size: 0.8rem;
+        opacity: 0.8;
+        line-height: 1.4;
+      }
+
+      #pauseIndicator {
+        margin-top: 0.35rem;
+        font-size: 0.74rem;
+        color: rgba(255, 255, 255, 0.75);
+      }
+
+      #hudPanel {
+        position: absolute;
+        bottom: 1rem;
+        left: 1rem;
+        width: min(240px, calc(100% - 2rem));
+        padding: 0.75rem 0.9rem;
+        background: rgba(10, 12, 18, 0.8);
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #fdfdfd;
+        font-size: 0.8rem;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      }
+
+      #hudPanel .hud-title {
+        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        margin-bottom: 0.4rem;
+        color: rgba(255, 255, 255, 0.9);
+      }
+
+      .hud-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.25rem;
+      }
+
+      .hud-row span {
+        opacity: 0.75;
+      }
+
+      .hud-row strong {
+        font-size: 0.95rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      @media (max-width: 600px) {
+        #controlPanel {
+          width: calc(100% - 2rem);
+          right: 1rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cesiumContainer"></div>
+    <section id="legendPanel">
+      <div id="legendTitle">速度 (m s⁻¹)</div>
+      <div id="legendBar"></div>
+      <div id="legendTicks"></div>
+    </section>
+    <section id="controlPanel">
+      <h2>风场控制 (三维)</h2>
+      <div class="control">
+        <label for="levelSelect">
+          等压面高度
+          <span id="levelLabel">-</span>
+        </label>
+        <select id="levelSelect"></select>
+      </div>
+      <div class="control">
+        <label for="multiLevel">
+          三维多层模式
+          <input id="multiLevel" type="checkbox" checked />
+        </label>
+      </div>
+      <div class="control">
+        <label for="colorScheme">颜色方案</label>
+        <select id="colorScheme"></select>
+      </div>
+      <div class="control">
+        <label for="levelStride">
+          三维层抽样
+          <span id="levelStrideValue">-</span>
+        </label>
+        <input
+          id="levelStride"
+          type="range"
+          min="1"
+          max="4"
+          step="1"
+          value="2"
+        />
+      </div>
+      <div class="control">
+        <label>视角预设</label>
+        <div class="view-buttons">
+          <button id="viewOblique">斜视</button>
+          <button id="viewTop">俯视</button>
+          <button id="viewWest">西向</button>
+          <button id="viewSouth">南向</button>
+        </div>
+      </div>
+      <div class="control">
+        <label>自由视角</label>
+        <div class="control-hint">
+          拖动滑块或点击“应用视角”即可从任意方向观察当前风场。
+        </div>
+        <label for="viewHeading">
+          方位角
+          <span id="viewHeadingValue">35°</span>
+        </label>
+        <input
+          id="viewHeading"
+          type="range"
+          min="0"
+          max="360"
+          step="1"
+          value="35"
+        />
+        <label for="viewPitch">
+          仰角
+          <span id="viewPitchValue">-40°</span>
+        </label>
+        <input
+          id="viewPitch"
+          type="range"
+          min="-89"
+          max="-5"
+          step="1"
+          value="-40"
+        />
+        <label for="viewRange">
+          观察距离
+          <span id="viewRangeValue">110%</span>
+        </label>
+        <input
+          id="viewRange"
+          type="range"
+          min="60"
+          max="220"
+          step="5"
+          value="110"
+        />
+        <button id="applyCustomView">应用视角</button>
+      </div>
+      <div class="control">
+        <label>自动漫游</label>
+        <div class="view-buttons">
+          <button id="orbitStart">开始漫游</button>
+          <button id="orbitStop">停止</button>
+        </div>
+        <label for="orbitSpeed">
+          漫游速度
+          <span id="orbitSpeedValue">-</span>
+        </label>
+        <input
+          id="orbitSpeed"
+          type="range"
+          min="0.1"
+          max="1.5"
+          step="0.1"
+          value="0.4"
+        />
+      </div>
+      <div class="control">
+        <div id="cameraHelp">
+          提示：左键拖动平移，右键拖动旋转，滚轮缩放。
+        </div>
+      </div>
+      <div class="control">
+        <label for="dynamicParticles">
+          缩放自适应粒子
+          <input id="dynamicParticles" type="checkbox" checked />
+        </label>
+        <div class="control-hint">
+          视角拉远时动态减少粒子，保持帧率稳定。
+        </div>
+      </div>
+      <div class="control">
+        <label for="particleCount">
+          粒子数量
+          <span id="particleCountValue">-</span>
+        </label>
+        <input
+          id="particleCount"
+          type="range"
+          min="200"
+          max="3000"
+          step="100"
+          value="1000"
+        />
+      </div>
+      <div class="control">
+        <label for="speedFactor">
+          速度放大
+          <span id="speedFactorValue">-</span>
+        </label>
+        <input
+          id="speedFactor"
+          type="range"
+          min="0.1"
+          max="12"
+          step="0.1"
+          value="8"
+        />
+      </div>
+      <div class="control">
+        <label for="lineWidth">
+          轨迹粗细
+          <span id="lineWidthValue">-</span>
+        </label>
+        <input
+          id="lineWidth"
+          type="range"
+          min="0.5"
+          max="6"
+          step="0.5"
+          value="2.2"
+        />
+      </div>
+      <div class="control">
+        <label for="trailLength">
+          轨迹长度
+          <span id="trailLengthValue">-</span>
+        </label>
+        <input
+          id="trailLength"
+          type="range"
+          min="2"
+          max="40"
+          step="1"
+          value="24"
+        />
+      </div>
+      <div class="control">
+        <label for="fadeOpacity">
+          轨迹衰减
+          <span id="fadeOpacityValue">-</span>
+        </label>
+        <input
+          id="fadeOpacity"
+          type="range"
+          min="0.80"
+          max="0.96"
+          step="0.001"
+          value="0.88"
+        />
+      </div>
+      <div class="control">
+        <label for="verticalScale">
+          垂直夸张
+          <span id="verticalScaleValue">-</span>
+        </label>
+        <input
+          id="verticalScale"
+          type="range"
+          min="200"
+          max="4000"
+          step="200"
+          value="1500"
+        />
+      </div>
+      <div class="control">
+        <button id="togglePause">暂停粒子</button>
+        <div id="pauseIndicator">动画运行中</div>
+      </div>
+      <div class="control">
+        <button id="resetLayer">重新播种粒子</button>
+      </div>
+      <div class="control">
+        <button id="presetClear">一键清晰查看</button>
+      </div>
+      <div class="control">
+        <button id="presetStream">流线方向模式</button>
+      </div>
+      <div class="control">
+        <button id="presetShowcase">展示模式（接近示意图）</button>
+      </div>
+      <div class="control">
+        <label for="toggleHeatmap">
+          底面速度晕染
+          <input id="toggleHeatmap" type="checkbox" />
+        </label>
+        <div class="control-hint">
+          可选择是否在地表显示颜色填充，仅保留粒子可视化。
+        </div>
+      </div>
+      <div class="control">
+        <label for="trailEffect">
+          流光尾迹
+          <input id="trailEffect" type="checkbox" checked />
+        </label>
+        <div class="control-hint">
+          为粒子叠加屏幕空间残影，让流场更顺滑。
+        </div>
+      </div>
+      <div class="control">
+        <label for="clampSurface">
+          贴地渲染
+          <input id="clampSurface" type="checkbox" />
+        </label>
+        <div class="control-hint">
+          勾选后粒子会贴近地面；不勾选则按原始高度渲染。
+        </div>
+      </div>
+      <div id="message">正在加载风场数据...</div>
+    </section>
+    <section id="hudPanel">
+      <div class="hud-title">实时风场</div>
+      <div class="hud-row">
+        <span>平均风速</span>
+        <strong id="hudSpeed">-</strong>
+      </div>
+      <div class="hud-row">
+        <span>主导风向</span>
+        <strong id="hudDirection">-</strong>
+      </div>
+      <div class="hud-row">
+        <span>平均高度</span>
+        <strong id="hudAltitude">-</strong>
+      </div>
+      <div class="hud-row">
+        <span>活跃粒子</span>
+        <strong id="hudParticleCount">-</strong>
+      </div>
+    </section>
+
+    <script src="https://cdn.jsdelivr.net/npm/cesium@1.114.0/Build/Cesium/Cesium.js"></script>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
